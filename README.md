@@ -38,54 +38,34 @@ This is the Django backend for the What's in Your Wafer application. It handles 
 ## Project Structure & File Roles
 
 ```text
-Panda's_Project/
-├── ocr_scanner/                  # Flutter Frontend App
-│   ├── android/                  # Android native code
-│   ├── ios/                      # iOS native code
-│   ├── lib/
-│   │   └── main.dart             # Main UI, camera, theme logic & rendering
-│   ├── test/                     # Flutter unit and widget tests
-│   ├── web/                      # Web platform code
-│   ├── windows/                  # Windows platform code
-│   ├── macos/                    # macOS platform code
-│   ├── linux/                    # Linux platform code
-│   ├── pubspec.yaml              # Flutter dependencies and project metadata
-│   ├── pubspec.lock              # Locked dependency versions
-│   ├── analysis_options.yaml     # Dart linting rules
-│   └── README.md                 # Frontend specific readme
+ocr_backend/                      # Django Backend API
+├── backend/                      # Django Project Configuration
+│   ├── __init__.py
+│   ├── asgi.py                   # Configured for Channels/WebSockets
+│   ├── settings.py               # Core Django settings, databases, INSTALLED_APPS
+│   ├── urls.py                   # Root URL configuration
+│   └── wsgi.py                   # WSGI config for production web servers
 │
-└── ocr_backend/                  # Django Backend API
-    ├── backend/                  # Django Project Configuration
-    │   ├── __init__.py
-    │   ├── asgi.py               # Configured for Channels/WebSockets
-    │   ├── settings.py           # Core Django settings, databases, INSTALLED_APPS
-    │   ├── urls.py               # Root URL configuration
-    │   └── wsgi.py               # WSGI config for production web servers
-    │
-    ├── api/                      # Main App Logic
-    │   ├── migrations/           # Database migration files
-    │   ├── __init__.py
-    │   ├── admin.py              # Django admin panel configurations
-    │   ├── apps.py               # App configuration
-    │   ├── consumers.py          # WebSocket handling for live AI results
-    │   ├── models.py             # Database models
-    │   ├── routing.py            # WebSocket URL routing (Channels)
-    │   ├── tests.py              # Backend unit tests
-    │   ├── urls.py               # REST API endpoints
-    │   └── views.py              # OCR, Gemini LangGraph & Health algorithm
-    │
-    ├── venv/                     # Python Virtual Environment (ignored in git)
-    ├── .env                      # API Keys for Gemini and Datalab (ignored in git)
-    ├── .gitignore                # Rules for what NOT to push to GitHub
-    ├── db.sqlite3                # Local SQLite database
-    ├── manage.py                 # Django command-line utility
-    ├── requirements.txt          # List of Python dependencies to install
-    └── README.md                 # This file
+├── api/                          # Main App Logic
+│   ├── migrations/               # Database migration files
+│   ├── __init__.py
+│   ├── admin.py                  # Django admin panel configurations
+│   ├── apps.py                   # App configuration
+│   ├── consumers.py              # WebSocket handling for live AI results
+│   ├── models.py                 # Database models
+│   ├── routing.py                # WebSocket URL routing (Channels)
+│   ├── tests.py                  # Backend unit tests
+│   ├── urls.py                   # REST API endpoints
+│   └── views.py                  # OCR, Gemini LangGraph & Health algorithm
+│
+├── venv/                         # Python Virtual Environment (ignored in git)
+├── .env                          # API Keys for Gemini and Datalab (ignored in git)
+├── .gitignore                    # Rules for what NOT to push to GitHub
+├── db.sqlite3                    # Local SQLite database
+├── manage.py                     # Django command-line utility
+├── requirements.txt              # List of Python dependencies to install
+└── README.md                     # This file
 ```
-
-### 📱 Frontend (Flutter)
-
-- `ocr_scanner/lib/main.dart`: Contains the entire Flutter UI logic. It handles taking pictures, uploading them to the backend, displaying the loading screens, rendering the AI charts, checking the "Double Layer" settings, and formatting the strict Health Ratings badges.
 
 ### ⚙️ Backend (Django)
 
