@@ -10,6 +10,8 @@ from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from asgiref.sync import async_to_sync
 from django.core.cache import cache
+from .ayurveda_dict import get_ayurvedic_insight
+from .weather_utils import get_current_weather
 
 def calculate_health_indices(data):
     """
@@ -158,6 +160,7 @@ class DashboardConfiguration(BaseModel):
     ingredients_list: List[str] = Field(description="List of extracted individual ingredients", default=[])
     fssai_license: str = Field(description="FSSAI License number if found, else empty string", default="")
     nutritional_info_per_100g: NutritionalInfo100g = Field(description="Standardized nutritional information per 100g or 100ml. Calculate this from serving size if 'Per 100g' is not directly provided in the text.", default=None)
+    ayurvedic_insight: str = Field(description="Ayurvedic climate-synced insight generated from the ingredients", default="")
 
 class ChartProposal(BaseModel):
     proposed_charts: List[str] = Field(description="List of proposed charts (e.g., 'Pie chart of Macronutrients: Protein, Carbs, Fats')")
@@ -253,6 +256,17 @@ def parse_with_gemini(data, request_id):
         structured_data = json.loads(parsed_json_str)
         structured_data['health_indices'] = calculate_health_indices(structured_data)
         
+        # --- Apply Ayurvedic / Climate Logic ---
+        location_data = cache.get(f"loc_{request_id}")
+        if location_data:
+            city = location_data.get('city')
+            state = location_data.get('state')
+            temperature = get_current_weather(city, state)
+            insight = get_ayurvedic_insight(structured_data.get('ingredients_list', []), temperature)
+            structured_data['ayurvedic_insight'] = insight
+        else:
+            structured_data['ayurvedic_insight'] = get_ayurvedic_insight(structured_data.get('ingredients_list', []), None)
+            
         return {'status': 'success', 'data': structured_data, 'is_structured': True, 'raw_text': data}
     except Exception as e:
         print(f"Gemini parsing failed: {e}")
@@ -309,6 +323,12 @@ class OCRView(APIView):
 
         if not request_id:
             return Response({'error': 'No request_id returned from Datalab'}, status=500)
+            
+        # Extract location data for Ayurvedic insights
+        city = request.POST.get('city')
+        state = request.POST.get('state')
+        if city or state:
+            cache.set(f"loc_{request_id}", {'city': city, 'state': state}, timeout=86400)
             
         use_double_layer = request.POST.get('use_double_layer') == 'true'
         if use_double_layer:
