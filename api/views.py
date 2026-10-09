@@ -8,7 +8,123 @@ from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
+from asgiref.sync import async_to_sync
 from django.core.cache import cache
+
+def calculate_health_indices(data):
+    """
+    Calculates health scores using established nutritional frameworks:
+    1. UK Food Standards Agency (FSA) Traffic Light System for thresholds (per 100g).
+    2. WHO & American Heart Association (AHA) guidelines for children's sugar/sodium.
+    3. EU regulations on synthetic colors (e.g., E102, E110) affecting children.
+    """
+    nutritional_info = data.get('nutritional_info_per_100g', {})
+    if not nutritional_info:
+        nutritional_info = {}
+    
+    protein = float(nutritional_info.get('protein_g', 0.0))
+    sugar = float(nutritional_info.get('sugar_g', 0.0))
+    sodium = float(nutritional_info.get('sodium_mg', 0.0))
+    fat = float(nutritional_info.get('fat_g', 0.0))
+    fiber = float(nutritional_info.get('fiber_g', 0.0))
+    energy = float(nutritional_info.get('energy_kcal', 0.0))
+
+    # Ingredients & Additives Check (Ultra-processed indicators)
+    ingredients = [str(i).lower() for i in data.get('ingredients_list', [])]
+    warnings = [str(w).lower() for w in data.get('health_warnings', [])]
+    all_text = " ".join(ingredients + warnings)
+    
+    has_artificial_sweeteners = any(x in all_text for x in ['steviol', 'sucralose', 'aspartame', 'sweetener', 'saccharin', 'acesulfame'])
+    has_caffeine = any(x in all_text for x in ['caffeine', 'coffee', 'tea'])
+    # EU Law requires a warning for these colors: "may have an adverse effect on activity and attention in children"
+    has_synthetic_colors = any(x in all_text for x in ['synthetic color', 'synthetic colour', 'e102', 'e110', 'e133', 'e129', 'tartrazine', 'sunset yellow'])
+    has_preservatives = any(x in all_text for x in ['bha', 'bht', 'preservative', 'benzoate', 'sorbate', 'nitrite', 'e211'])
+    has_palm_oil = 'palm' in all_text
+
+    # --- ADULT SCORE (Based on UK FSA thresholds per 100g) ---
+    # Max Score: 10
+    adult_score = 10
+    adult_reasons = []
+    
+    # FSA Red (High) thresholds per 100g
+    if sugar > 22.5: 
+        adult_score -= 4
+        adult_reasons.append("High Sugar (>22.5g/100g)")
+    elif sugar > 10.0:
+        adult_score -= 2 # Amber
+        
+    if fat > 17.5:
+        adult_score -= 2
+        adult_reasons.append("High Fat")
+        
+    if sodium > 600: # 600mg sodium = 1.5g salt (FSA Red)
+        adult_score -= 3
+        adult_reasons.append("High Sodium (>600mg/100g)")
+        
+    if has_preservatives or has_synthetic_colors:
+        adult_score -= 1
+        
+    if protein > 10 or fiber > 4:
+        adult_score = min(10, adult_score + 1)
+        
+    adult_score = max(1, min(10, adult_score))
+    adult_rating = "Excellent" if adult_score >= 8 else "Good" if adult_score >= 6 else "Moderate" if adult_score >= 4 else "Poor"
+    
+    # --- BABY / CHILD SCORE (Based on AHA & WHO Pediatric Guidelines) ---
+    # Extremely strict on added sugars, sodium, and colors.
+    baby_score = 10
+    baby_reasons = []
+    
+    # AHA: Children under 2 should have NO added sugar. Children 2-18 max 25g/day.
+    if sugar > 15.0:
+        baby_score -= 6
+        baby_reasons.append("Excessive Sugar for Kids")
+    elif sugar > 5.0:
+        baby_score -= 3
+        baby_reasons.append("Moderate Sugar")
+        
+    if sodium > 300: # Kid's kidneys can't process high sodium
+        baby_score -= 4
+        baby_reasons.append("High Sodium for Kids")
+        
+    if has_synthetic_colors:
+        baby_score -= 4
+        baby_reasons.append("Contains Artificial Colors (e.g., E102/E110)")
+        
+    if has_caffeine or has_artificial_sweeteners:
+        baby_score -= 4
+        baby_reasons.append("Contains Sweeteners/Caffeine")
+        
+    baby_score = max(1, min(10, baby_score))
+    baby_rating = "Excellent" if baby_score >= 8 else "Good" if baby_score >= 6 else "Moderate" if baby_score >= 4 else "Not Recommended"
+    if not baby_reasons: baby_reasons = ["Suitable based on data"]
+
+    # --- SENIOR SCORE ---
+    senior_score = 10
+    senior_reasons = []
+    
+    if sodium > 400: # Hypertension risk
+        senior_score -= 4
+        senior_reasons.append("High Sodium (Hypertension risk)")
+    if sugar > 15.0:
+        senior_score -= 3
+    if fiber < 3.0: # Seniors need high fiber for digestion
+        senior_score -= 1
+        senior_reasons.append("Low Fiber")
+    if protein > 12.0:
+        senior_score = min(10, senior_score + 1)
+        
+    senior_score = max(1, min(10, senior_score))
+    senior_rating = "Excellent" if senior_score >= 8 else "Good" if senior_score >= 6 else "Moderate" if senior_score >= 4 else "Poor"
+
+    return {
+        "adult": {"score": adult_score, "rating": adult_rating, "label": "Adults (18-60)", "reason": ", ".join(adult_reasons) if adult_reasons else "Healthy profile"},
+        "senior": {"score": senior_score, "rating": senior_rating, "label": "Seniors (60+)", "reason": ", ".join(senior_reasons) if senior_reasons else "Healthy profile"},
+        "baby": {"score": baby_score, "rating": baby_rating, "label": "Babies & Toddlers", "reason": ", ".join(baby_reasons)}
+    }
+
+
+
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, START, END
 from typing import TypedDict, List
@@ -33,17 +149,6 @@ class NutritionalInfo100g(BaseModel):
     sodium_mg: float = Field(description="Sodium in mg per 100g", default=0.0)
     fiber_g: float = Field(description="Dietary Fiber in grams per 100g", default=0.0)
 
-class HealthScore(BaseModel):
-    score: int = Field(description="Score from 1 to 10 (1 is terrible/unhealthy, 10 is excellent/healthy)")
-    rating: str = Field(description="One of: 'Excellent', 'Good', 'Moderate', 'Poor', 'Not Recommended'")
-    label: str = Field(description="Target group label, e.g., 'Babies & Toddlers', 'Adults (18-60)', 'Seniors (60+)'")
-    reason: str = Field(description="Short, strict reason for the score. Be extremely harsh for high sugar or additives.")
-
-class AIHealthAssessment(BaseModel):
-    baby: HealthScore = Field(description="Assessment for Babies & Toddlers. Be absolutely brutal: >15g sugar/100g or ANY artificial additives/colors means score MUST be <= 3 ('Not Recommended').")
-    adult: HealthScore = Field(description="Assessment for Adults. >30g sugar/100g means score MUST be <= 4 ('Poor'). >60g sugar/100g MUST be <= 2 ('Poor').")
-    senior: HealthScore = Field(description="Assessment for Seniors. Penalize high sodium and high sugar severely. Reward fiber and protein.")
-
 class DashboardConfiguration(BaseModel):
     """Configuration for dashboard visualizations based on extracted packet text."""
     visualizations: List[Visualization] = Field(description="List of visualizations to render")
@@ -53,7 +158,6 @@ class DashboardConfiguration(BaseModel):
     ingredients_list: List[str] = Field(description="List of extracted individual ingredients", default=[])
     fssai_license: str = Field(description="FSSAI License number if found, else empty string", default="")
     nutritional_info_per_100g: NutritionalInfo100g = Field(description="Standardized nutritional information per 100g or 100ml. Calculate this from serving size if 'Per 100g' is not directly provided in the text.", default=None)
-    health_indices: AIHealthAssessment = Field(description="AI-generated strict health scores based on the nutritional profile and ingredients.")
 
 class ChartProposal(BaseModel):
     proposed_charts: List[str] = Field(description="List of proposed charts (e.g., 'Pie chart of Macronutrients: Protein, Carbs, Fats')")
@@ -94,10 +198,11 @@ def analyze_node(state: AgentState):
         Follow these instructions carefully:
         1. Create visualizations STRICTLY based on the following proposed charts:
         {chart_instructions}
-        2. VERY IMPORTANT: Extract nutritional info standardized to 'Per 100g' into `nutritional_info_per_100g`. If the packet only lists 'Per Serving', mathematically scale it to 100g.
-        3. Determine strict health scores in `health_indices` for Baby, Adult, and Senior based on the standardized 100g data and ingredients. Be ruthless with high sugar! A product with 69g sugar per 100g is pure junk and MUST get scores of 1-3.
-        4. Identify allergens, dietary indicator (Veg/Non-Veg), ingredients, and FSSAI License number.
-        5. Add short warnings to `health_warnings` for high sugar, high fat, or controversial additives.
+        2. VERY IMPORTANT: Extract nutritional info standardized to 'Per 100g' into `nutritional_info_per_100g`. If the packet only lists 'Per Serving' (e.g. 13.8g sugar per 20g serve), you MUST mathematically scale it to 100g (e.g. 13.8 * 5 = 69g sugar per 100g) for these fields.
+        3. Identify any listed allergens (like Milk, Soy, Wheat) and determine if the product is 'Veg', 'Non-Veg', or 'Unknown'.
+        4. Extract the list of ingredients individually.
+        5. If Sugar or Fats are very high, or if there are controversial artificial additives, add short warnings to `health_warnings`.
+        6. Extract the FSSAI License number if present.
         
         Extracted Text:
         {input_text}
@@ -106,10 +211,11 @@ def analyze_node(state: AgentState):
         prompt = f"""
         You are an expert data visualization and health analysis assistant. Read the text below extracted from a product packet.
         1. Identify all quantitative data and determine the best way to visualize this data using charts.
-        2. VERY IMPORTANT: Extract nutritional info standardized to 'Per 100g' into `nutritional_info_per_100g`. If the packet only lists 'Per Serving', mathematically scale it to 100g.
-        3. Determine strict health scores in `health_indices` for Baby, Adult, and Senior based on the standardized 100g data and ingredients. Be ruthless with high sugar! A product with 69g sugar per 100g is pure junk and MUST get scores of 1-3.
-        4. Identify allergens, dietary indicator (Veg/Non-Veg), ingredients, and FSSAI License number.
-        5. Add short warnings to `health_warnings` for high sugar, high fat, or controversial additives.
+        2. VERY IMPORTANT: Extract nutritional info standardized to 'Per 100g' into `nutritional_info_per_100g`. If the packet only lists 'Per Serving' (e.g. 13g sugar per 20g serve), you MUST mathematically scale it to 100g (e.g. 13 * 5 = 65g sugar per 100g) for these fields.
+        3. Identify any listed allergens (like Milk, Soy, Wheat) and determine if the product is 'Veg', 'Non-Veg', or 'Unknown'.
+        4. Extract the list of ingredients individually.
+        5. If Sugar or Fats are very high, or if there are controversial artificial additives, add short warnings to `health_warnings`.
+        6. Extract the FSSAI License number if present.
         
         Extracted Text:
         {input_text}
@@ -145,8 +251,7 @@ def parse_with_gemini(data, request_id):
         print("============================")
         
         structured_data = json.loads(parsed_json_str)
-        # We no longer need to call calculate_health_indices(structured_data)
-        # structured_data['health_indices'] is directly provided by Gemini
+        structured_data['health_indices'] = calculate_health_indices(structured_data)
         
         return {'status': 'success', 'data': structured_data, 'is_structured': True, 'raw_text': data}
     except Exception as e:
